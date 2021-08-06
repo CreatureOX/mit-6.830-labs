@@ -1,6 +1,5 @@
 package simpledb.common;
 
-import simpledb.common.Type;
 import simpledb.storage.DbFile;
 import simpledb.storage.HeapFile;
 import simpledb.storage.TupleDesc;
@@ -10,7 +9,7 @@ import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.IntStream;
 
 /**
  * The Catalog keeps track of all available tables in the database and their
@@ -23,12 +22,19 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class Catalog {
 
+    private List<DbFile> dbFiles;
+    private List<String> names;
+    private List<String> pkeyFields;
+
     /**
      * Constructor.
      * Creates a new, empty catalog.
      */
     public Catalog() {
         // some code goes here
+        this.dbFiles = new ArrayList<>();
+        this.names = new ArrayList<>();
+        this.pkeyFields = new ArrayList<>();
     }
 
     /**
@@ -42,6 +48,24 @@ public class Catalog {
      */
     public void addTable(DbFile file, String name, String pkeyField) {
         // some code goes here
+        int nameIndex = names.indexOf(name);
+        if (nameIndex != -1){
+            dbFiles.remove(nameIndex);
+            names.remove(nameIndex);
+            pkeyFields.remove(nameIndex);
+        }
+        int dbFileIndex = dbFiles.stream()
+                .filter(dbFile -> dbFile.getId() == file.getId())
+                .mapToInt(dbFile -> dbFiles.indexOf(dbFile))
+                .findAny().orElse(-1);
+        if (dbFileIndex != -1){
+            dbFiles.remove(dbFileIndex);
+            names.remove(dbFileIndex);
+            pkeyFields.remove(dbFileIndex);
+        }
+        dbFiles.add(file);
+        names.add(name);
+        pkeyFields.add(pkeyField);
     }
 
     public void addTable(DbFile file, String name) {
@@ -65,7 +89,10 @@ public class Catalog {
      */
     public int getTableId(String name) throws NoSuchElementException {
         // some code goes here
-        return 0;
+        return IntStream.range(0, dbFiles.size())
+                .filter(i -> names.get(i).equals(name))
+                .map(i -> dbFiles.get(i).getId())
+                .findAny().orElseThrow(NoSuchElementException::new);
     }
 
     /**
@@ -76,7 +103,10 @@ public class Catalog {
      */
     public TupleDesc getTupleDesc(int tableid) throws NoSuchElementException {
         // some code goes here
-        return null;
+        return dbFiles.stream()
+                .filter(dbFile -> dbFile.getId() == tableid)
+                .map(DbFile::getTupleDesc)
+                .findAny().orElseThrow(NoSuchElementException::new);
     }
 
     /**
@@ -87,27 +117,38 @@ public class Catalog {
      */
     public DbFile getDatabaseFile(int tableid) throws NoSuchElementException {
         // some code goes here
-        return null;
+        return dbFiles.stream()
+                .filter(dbFile -> dbFile.getId() == tableid)
+                .findAny().orElseThrow(NoSuchElementException::new);
     }
 
     public String getPrimaryKey(int tableid) {
         // some code goes here
-        return null;
+        return dbFiles.stream()
+                .filter(dbFile -> dbFile.getId() == tableid)
+                .map(dbFile -> pkeyFields.get(dbFiles.indexOf(dbFile)))
+                .findAny().orElse(null);
     }
 
     public Iterator<Integer> tableIdIterator() {
         // some code goes here
-        return null;
+        return dbFiles.stream().mapToInt(DbFile::getId).iterator();
     }
 
     public String getTableName(int id) {
         // some code goes here
-        return null;
+        return dbFiles.stream()
+                .filter(dbFile -> dbFile.getId() == id)
+                .map(dbFile -> names.get(dbFiles.indexOf(dbFile)))
+                .findAny().orElse(null);
     }
     
     /** Delete all tables from the catalog */
     public void clear() {
         // some code goes here
+        dbFiles.clear();
+        names.clear();
+        pkeyFields.clear();
     }
     
     /**
