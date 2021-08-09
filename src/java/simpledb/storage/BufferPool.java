@@ -80,10 +80,19 @@ public class BufferPool {
     public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
         // some code goes here
+        Page cachedPage = Arrays.stream(pages)
+                .filter(page -> null != page && page.getId().equals(pid))
+                .findAny().orElse(null);
+        if (null != cachedPage){
+            return cachedPage;
+        }
         if (pageIndex == pages.length){
             throw new DbException("Too much requests are made");
         }
-        return null;
+        DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+        cachedPage = file.readPage(pid);
+        pages[pageIndex++] = cachedPage;
+        return cachedPage;
     }
 
     /**
