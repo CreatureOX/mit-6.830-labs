@@ -78,7 +78,11 @@ public class HeapFile implements DbFile {
     public Page readPage(PageId pid) {
         // some code goes here
         try(RandomAccessFile randomAccessFile = new RandomAccessFile(file, "r");) {
-            randomAccessFile.seek((long) pid.getPageNumber() * BufferPool.getPageSize());
+            long pos = (long) pid.getPageNumber() * BufferPool.getPageSize();
+            if (pos > randomAccessFile.length()) {
+                throw new IllegalArgumentException("invalid page number");
+            }
+            randomAccessFile.seek(pos);
             byte[] bytes = new byte[BufferPool.getPageSize()];
             randomAccessFile.read(bytes, 0, bytes.length);
             return new HeapPage((HeapPageId) pid, bytes);
@@ -156,13 +160,13 @@ public class HeapFile implements DbFile {
 
         @Override
         public boolean hasNext() throws DbException, TransactionAbortedException {
-            if (pageNumber >= heapFile.numPages()) {
-                return false;
-            }
             if (null == tupleIterator) {
                 return false;
             }
             if (!tupleIterator.hasNext()) {
+                if (pageNumber >= heapFile.numPages() - 1) {
+                    return false;
+                }
                 tupleIterator = getTupleIterator(++pageNumber);
             }
             return tupleIterator.hasNext();
