@@ -1,7 +1,11 @@
 package simpledb.execution;
 
+import simpledb.common.DbException;
 import simpledb.common.Type;
-import simpledb.storage.Tuple;
+import simpledb.storage.*;
+import simpledb.transaction.TransactionAbortedException;
+
+import java.util.*;
 
 /**
  * Knows how to compute some aggregate over a set of StringFields.
@@ -9,6 +13,13 @@ import simpledb.storage.Tuple;
 public class StringAggregator implements Aggregator {
 
     private static final long serialVersionUID = 1L;
+
+    private int groupByFieldId;
+    private Type groupByFieldType;
+    private int aggregateFieldId;
+    private Op what;
+
+    private Map<Field, Integer> aggregateMap;
 
     /**
      * Aggregate constructor
@@ -21,6 +32,11 @@ public class StringAggregator implements Aggregator {
 
     public StringAggregator(int gbfield, Type gbfieldtype, int afield, Op what) {
         // some code goes here
+        this.groupByFieldId = gbfield;
+        this.groupByFieldType = gbfieldtype;
+        this.aggregateFieldId = afield;
+        this.what = what;
+        this.aggregateMap = new HashMap<>();
     }
 
     /**
@@ -29,6 +45,17 @@ public class StringAggregator implements Aggregator {
      */
     public void mergeTupleIntoGroup(Tuple tup) {
         // some code goes here
+        Field groupByField = Aggregator.NO_GROUPING == this.groupByFieldId?null:tup.getField(this.groupByFieldId);
+        if (null != groupByField && !groupByField.getType().equals(this.groupByFieldType)) {
+            throw new IllegalArgumentException("wrong type");
+        }
+        switch (this.what) {
+            case COUNT:
+                aggregateMap.put(groupByField, aggregateMap.getOrDefault(groupByField, 0) + 1);
+                break;
+            default:
+                throw new IllegalArgumentException("Aggregator not support.");
+        }
     }
 
     /**
@@ -41,7 +68,67 @@ public class StringAggregator implements Aggregator {
      */
     public OpIterator iterator() {
         // some code goes here
-        throw new UnsupportedOperationException("please implement me for lab2");
+        // throw new UnsupportedOperationException("please implement me for lab2");
+        return new StringAggIterator();
+    }
+
+    private class StringAggIterator implements OpIterator {
+
+        private Iterator<Map.Entry<Field, Integer>> aggregateIterator;
+        private TupleDesc tupleDesc;
+
+        public StringAggIterator() {
+            this.tupleDesc = null == groupByFieldType?
+                    new TupleDesc(new Type[]{Type.INT_TYPE}, new String[]{"groupValue"}):
+                    new TupleDesc(new Type[]{groupByFieldType, Type.INT_TYPE}, new String[]{"groupValue", "aggregateValue"});
+        }
+
+        @Override
+        public void open() throws DbException, TransactionAbortedException {
+            aggregateIterator = aggregateMap.entrySet().iterator();
+        }
+
+        @Override
+        public boolean hasNext() throws DbException, TransactionAbortedException {
+            return aggregateIterator.hasNext();
+        }
+
+        @Override
+        public Tuple next() throws DbException, TransactionAbortedException, NoSuchElementException {
+            Tuple tuple = new Tuple(this.tupleDesc);
+            switch (what) {
+                case COUNT:
+                    Map.Entry<Field, Integer> groupEntry = aggregateIterator.next();
+                    Field groupField = groupEntry.getKey();
+                    Integer aggregateValue = groupEntry.getValue();
+                    if (null == groupField) {
+                        tuple.setField(0, new IntField(aggregateValue));
+                    }else {
+                        tuple.setField(0, groupField);
+                        tuple.setField(1, new IntField(aggregateValue));
+                    }
+                    break;
+                default:
+                    throw new IllegalArgumentException("Aggregator not support.");
+            }
+            return tuple;
+        }
+
+        @Override
+        public void rewind() throws DbException, TransactionAbortedException {
+            close();
+            open();
+        }
+
+        @Override
+        public TupleDesc getTupleDesc() {
+            return tupleDesc;
+        }
+
+        @Override
+        public void close() {
+            aggregateIterator = null;
+        }
     }
 
 }
