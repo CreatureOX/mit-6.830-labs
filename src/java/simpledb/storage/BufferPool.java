@@ -10,6 +10,7 @@ import simpledb.transaction.TransactionId;
 import java.io.*;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -87,7 +88,7 @@ public class BufferPool {
             return cachedPage;
         }
         if (pageIndex == pages.length){
-            throw new DbException("Too much requests are made");
+            evictPage();
         }
         DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
         cachedPage = file.readPage(pid);
@@ -157,6 +158,15 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(tableId);
+        List<Page> modifyPages = dbFile.insertTuple(tid, t);
+        for (Page modifyPage: modifyPages) {
+            if (this.pageIndex >= this.pages.length) {
+                evictPage();
+            }
+            this.pages[this.pageIndex++] = modifyPage;
+            modifyPage.markDirty(true, tid);
+        }
     }
 
     /**
@@ -176,6 +186,17 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
+        DbFile dbFile = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId());
+        List<Page> modifyPages = dbFile.deleteTuple(tid, t);
+        for (Page modifyPage: modifyPages) {
+            for (int i=0;i<pages.length;i++) {
+                if (pages[i].getId().equals(modifyPage.getId())) {
+                    modifyPage.markDirty(true, tid);
+                    pages[i] = modifyPage;
+                    break;
+                }
+            }
+        }
     }
 
     /**
@@ -225,6 +246,7 @@ public class BufferPool {
     private synchronized  void evictPage() throws DbException {
         // some code goes here
         // not necessary for lab1
+        this.pageIndex--;
     }
 
 }
