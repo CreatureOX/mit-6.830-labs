@@ -11,6 +11,7 @@ import java.io.*;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -207,7 +208,11 @@ public class BufferPool {
     public synchronized void flushAllPages() throws IOException {
         // some code goes here
         // not necessary for lab1
-
+        for (int i=0;i<pages.length;i++) {
+            if (null != pages[i].isDirty()) {
+                flushPage(pages[i].getId());
+            }
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -221,6 +226,18 @@ public class BufferPool {
     public synchronized void discardPage(PageId pid) {
         // some code goes here
         // not necessary for lab1
+        for (int i=0;i<pages.length;i++) {
+            if (!pages[i].getId().equals(pid)) {
+                continue;
+            }
+            pages[i] = null;
+            if (pages.length - (i + 1) >= 0) {
+                System.arraycopy(
+                        pages, i + 1,
+                        pages, i + 1 - 1,
+                        pages.length - (i + 1));
+            }
+        }
     }
 
     /**
@@ -230,6 +247,14 @@ public class BufferPool {
     private synchronized  void flushPage(PageId pid) throws IOException {
         // some code goes here
         // not necessary for lab1
+        Page matchedPage = Arrays.stream(pages)
+                .filter(page -> page.getId().equals(pid))
+                .findAny().orElseThrow(NoSuchElementException::new);
+        TransactionId tid = matchedPage.isDirty();
+        if (tid != null) {
+            Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(matchedPage);
+            matchedPage.markDirty(false, null);
+        }
     }
 
     /** Write all pages of the specified transaction to disk.
@@ -247,6 +272,12 @@ public class BufferPool {
         // some code goes here
         // not necessary for lab1
         this.pageIndex--;
+        PageId pid = pages[pageIndex].getId();
+        try {
+            flushPage(pid);
+        }catch (IOException e) {
+        }
+        discardPage(pid);
     }
 
 }
