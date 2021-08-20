@@ -128,6 +128,8 @@ public class HeapFile implements DbFile {
                 page.insertTuple(t);
                 modifyPages.add(page);
                 return modifyPages;
+            }else {
+                Database.getBufferPool().unsafeReleasePage(tid, heapPageId);
             }
         }
         try(BufferedOutputStream bufferedOutputStream = new BufferedOutputStream(new FileOutputStream(file, true))) {
