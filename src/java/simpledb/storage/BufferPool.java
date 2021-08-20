@@ -9,9 +9,7 @@ import simpledb.transaction.TransactionId;
 
 import java.io.*;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.NoSuchElementException;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -22,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * The BufferPool is also responsible for locking;  when a transaction fetches
  * a page, BufferPool checks that the transaction has the appropriate
  * locks to read/write the page.
- * 
+ *
  * @Threadsafe, all fields are final
  */
 public class BufferPool {
@@ -30,14 +28,118 @@ public class BufferPool {
     private static final int DEFAULT_PAGE_SIZE = 4096;
 
     private static int pageSize = DEFAULT_PAGE_SIZE;
-    
+
     /** Default number of pages passed to the constructor. This is used by
-    other classes. BufferPool should use the numPages argument to the
-    constructor instead. */
+     other classes. BufferPool should use the numPages argument to the
+     constructor instead. */
     public static final int DEFAULT_PAGES = 50;
 
     private int pageIndex;
     private Page[] pages;
+
+    private static class Lock {
+        TransactionId tid;
+        int lockType;
+
+        static final int SHARED = 0;
+        static final int EXCLUSIVE = 1;
+
+        public Lock(TransactionId tid, int lockType) {
+            this.tid = tid;
+            this.lockType = lockType;
+        }
+
+        public static int getLockType(Permissions perm) {
+            if (Permissions.READ_ONLY.equals(perm)) {
+                return SHARED;
+            }
+            if (Permissions.READ_WRITE.equals(perm)) {
+                return EXCLUSIVE;
+            }
+            throw new IllegalArgumentException("illegal lock type");
+        }
+
+    }
+
+    private static class PageLockManager {
+        private Map<PageId, Vector<Lock>> pageLockMap;
+
+        public PageLockManager() {
+            this.pageLockMap = new ConcurrentHashMap<>();
+        }
+
+        public synchronized boolean acquireLock(TransactionId tid, PageId pid, int lockType) {
+            Vector<Lock> locks = pageLockMap.get(pid);
+            if (null == locks) {
+                Lock lock = new Lock(tid, lockType);
+                Vector<Lock> newLockList = new Vector<>();
+                newLockList.add(lock);
+                pageLockMap.put(pid, newLockList);
+                return true;
+            }else {
+                // check tid held locks
+                for (Lock lock: locks) {
+                    if (!lock.tid.equals(tid)) {
+                        continue;
+                    }
+                    if (lock.lockType == lockType) {
+                        return true;
+                    }
+                    if (Lock.EXCLUSIVE == lock.lockType) {
+                        return true;
+                    }
+                    if (locks.size() == 1) {
+                        lock.lockType = Lock.EXCLUSIVE;
+                        return true;
+                    }else {
+                        return false;
+                    }
+                }
+                boolean heldExclusiveLock = locks.stream().anyMatch(lock -> Lock.EXCLUSIVE == lock.lockType);
+                if (heldExclusiveLock) {
+                    return false;
+                }
+                if (Lock.SHARED == lockType) {
+                    Lock lock = new Lock(tid, Lock.SHARED);
+                    locks.add(lock);
+                    pageLockMap.put(pid, locks);
+                    return true;
+                }
+                return false;
+            }
+        }
+
+        public synchronized void releaseLock(TransactionId tid, PageId pid) {
+            Vector<Lock> locks = pageLockMap.get(pid);
+            assert !locks.isEmpty(): "page not locked";
+            for (Lock lock: locks) {
+                if (!lock.tid.equals(tid)) {
+                    continue;
+                }
+                locks.remove(lock);
+                if (locks.isEmpty()) {
+                    pageLockMap.remove(pid);
+                }
+                return ;
+            }
+        }
+
+        public synchronized boolean holdsLock(TransactionId tid, PageId pid) {
+            if (!pageLockMap.containsKey(pid)) {
+                return false;
+            }
+            List<Lock> locks = pageLockMap.get(pid);
+            for (Lock lock: locks) {
+                if (lock.tid.equals(tid)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+    }
+
+    private PageLockManager pageLockManager;
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -48,20 +150,21 @@ public class BufferPool {
         // some code goes here
         this.pages = new Page[numPages];
         this.pageIndex = 0;
+        this.pageLockManager = new PageLockManager();
     }
-    
+
     public static int getPageSize() {
-      return pageSize;
+        return pageSize;
     }
-    
+
     // THIS FUNCTION SHOULD ONLY BE USED FOR TESTING!!
     public static void setPageSize(int pageSize) {
-    	BufferPool.pageSize = pageSize;
+        BufferPool.pageSize = pageSize;
     }
-    
+
     // THIS FUNCTION SHOULD ONLY BE USED FOR TESTING!!
     public static void resetPageSize() {
-    	BufferPool.pageSize = DEFAULT_PAGE_SIZE;
+        BufferPool.pageSize = DEFAULT_PAGE_SIZE;
     }
 
     /**
@@ -80,8 +183,10 @@ public class BufferPool {
      * @param perm the requested permissions on the page
      */
     public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
-        throws TransactionAbortedException, DbException {
+            throws TransactionAbortedException, DbException {
         // some code goes here
+        while (!pageLockManager.acquireLock(tid, pid, Lock.getLockType(perm))) {
+        }
         Page cachedPage = Arrays.stream(pages)
                 .filter(page -> null != page && page.getId().equals(pid))
                 .findAny().orElse(null);
@@ -109,6 +214,7 @@ public class BufferPool {
     public  void unsafeReleasePage(TransactionId tid, PageId pid) {
         // some code goes here
         // not necessary for lab1|lab2
+        pageLockManager.releaseLock(tid, pid);
     }
 
     /**
@@ -125,7 +231,7 @@ public class BufferPool {
     public boolean holdsLock(TransactionId tid, PageId p) {
         // some code goes here
         // not necessary for lab1|lab2
-        return false;
+        return pageLockManager.holdsLock(tid, p);
     }
 
     /**
@@ -145,7 +251,7 @@ public class BufferPool {
      * acquire a write lock on the page the tuple is added to and any other 
      * pages that are updated (Lock acquisition is not needed for lab2). 
      * May block if the lock(s) cannot be acquired.
-     * 
+     *
      * Marks any pages that were dirtied by the operation as dirty by calling
      * their markDirty bit, and adds versions of any pages that have 
      * been dirtied to the cache (replacing any existing versions of those pages) so 
@@ -156,7 +262,7 @@ public class BufferPool {
      * @param t the tuple to add
      */
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
-        throws DbException, IOException, TransactionAbortedException {
+            throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
         DbFile dbFile = Database.getCatalog().getDatabaseFile(tableId);
@@ -184,7 +290,7 @@ public class BufferPool {
      * @param t the tuple to delete
      */
     public  void deleteTuple(TransactionId tid, Tuple t)
-        throws DbException, IOException, TransactionAbortedException {
+            throws DbException, IOException, TransactionAbortedException {
         // some code goes here
         // not necessary for lab1
         DbFile dbFile = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId());
@@ -209,20 +315,20 @@ public class BufferPool {
         // some code goes here
         // not necessary for lab1
         for (int i=0;i<pages.length;i++) {
-            if (null != pages[i].isDirty()) {
+            if (null != pages[i] && null != pages[i].isDirty()) {
                 flushPage(pages[i].getId());
             }
         }
     }
 
     /** Remove the specific page id from the buffer pool.
-        Needed by the recovery manager to ensure that the
-        buffer pool doesn't keep a rolled back page in its
-        cache.
-        
-        Also used by B+ tree files to ensure that deleted pages
-        are removed from the cache so they can be reused safely
-    */
+     Needed by the recovery manager to ensure that the
+     buffer pool doesn't keep a rolled back page in its
+     cache.
+
+     Also used by B+ tree files to ensure that deleted pages
+     are removed from the cache so they can be reused safely
+     */
     public synchronized void discardPage(PageId pid) {
         // some code goes here
         // not necessary for lab1
