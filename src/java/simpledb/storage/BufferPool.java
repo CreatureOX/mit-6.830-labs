@@ -195,7 +195,13 @@ public class BufferPool {
     public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
             throws TransactionAbortedException, DbException {
         // some code goes here
+        long timeout = new Random().nextInt(2000) + 1000;
+        long startTime = System.currentTimeMillis();
         while (!pageLockManager.acquireLock(tid, pid, Lock.getLockType(perm))) {
+            long endTime = System.currentTimeMillis();
+            if (endTime - startTime > timeout) {
+                throw new TransactionAbortedException();
+            }
         }
         Page cachedPage = cache.get(pid);
         if (null != cachedPage){
