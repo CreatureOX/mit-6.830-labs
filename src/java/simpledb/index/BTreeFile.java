@@ -6,6 +6,7 @@ import java.util.*;
 import simpledb.common.Database;
 import simpledb.common.Permissions;
 import simpledb.execution.IndexPredicate;
+import simpledb.execution.Predicate;
 import simpledb.execution.Predicate.Op;
 import simpledb.common.DbException;
 import simpledb.common.Debug;
@@ -188,7 +189,25 @@ public class BTreeFile implements DbFile {
                                        Field f)
 					throws DbException, TransactionAbortedException {
 		// some code goes here
-        return null;
+		if (BTreePageId.LEAF == pid.pgcateg()) {
+			return (BTreeLeafPage) this.getPage(tid, dirtypages, pid, perm);
+		}
+		BTreeInternalPage internalPage = (BTreeInternalPage) this.getPage(tid, dirtypages, pid, Permissions.READ_ONLY);
+        Iterator<BTreeEntry> iterator = internalPage.iterator();
+        if (!iterator.hasNext()) {
+        	throw new DbException("internal page contains >=1 data");
+        }
+        BTreeEntry entry = iterator.next();
+        BTreePageId nextPid;
+        if (null == f) {
+        	nextPid = entry.getLeftChild();
+        }else {
+        	while (iterator.hasNext() && f.compare(Predicate.Op.GREATER_THAN, entry.getKey())) {
+        		entry = iterator.next();
+	        }
+        	nextPid = f.compare(Op.LESS_THAN_OR_EQ, entry.getKey())? entry.getLeftChild(): entry.getRightChild();
+        }
+		return findLeafPage(tid, dirtypages, nextPid, perm, f);
 	}
 	
 	/**
