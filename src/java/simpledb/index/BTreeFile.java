@@ -1,18 +1,18 @@
 package simpledb.index;
 
-import java.io.*;
-import java.util.*;
-
 import simpledb.common.Database;
+import simpledb.common.DbException;
+import simpledb.common.Debug;
 import simpledb.common.Permissions;
 import simpledb.execution.IndexPredicate;
 import simpledb.execution.Predicate;
 import simpledb.execution.Predicate.Op;
-import simpledb.common.DbException;
-import simpledb.common.Debug;
 import simpledb.storage.*;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
+
+import java.io.*;
+import java.util.*;
 
 /**
  * BTreeFile is an implementation of a DbFile that stores a B+ tree.
@@ -258,8 +258,38 @@ public class BTreeFile implements DbFile {
 		// the new entry.  getParentWithEmtpySlots() will be useful here.  Don't forget to update
 		// the sibling pointers of all the affected leaf pages.  Return the page into which a 
 		// tuple with the given key field should be inserted.
-        return null;
-		
+		BTreeLeafPage newRightSiblingPage = (BTreeLeafPage) getEmptyPage(tid, dirtypages, BTreePageId.LEAF);
+		Iterator<Tuple> iterator = page.reverseIterator();
+		Tuple[] halfTuple = new Tuple[(page.getNumTuples() + 1)/2];
+		for (int i=halfTuple.length-1;iterator.hasNext() && i>=0;i--) {
+			halfTuple[i] = iterator.next();
+		}
+		for (int i=halfTuple.length-1;i>=0;i--) {
+			page.deleteTuple(halfTuple[i]);
+			newRightSiblingPage.insertTuple(halfTuple[i]);
+		}
+
+		Field middleKeyField = halfTuple[0].getField(keyField);
+		BTreeInternalPage parentPage = getParentWithEmptySlots(tid, dirtypages, page.getParentId(), middleKeyField);
+		BTreePageId oldRightSiblingId = page.getRightSiblingId();
+		newRightSiblingPage.setRightSiblingId(oldRightSiblingId);
+		newRightSiblingPage.setLeftSiblingId(page.getId());
+		page.setRightSiblingId(newRightSiblingPage.getId());
+		newRightSiblingPage.setParentId(parentPage.getId());
+		page.setParentId(parentPage.getId());
+		BTreeEntry parentEntry = new BTreeEntry(middleKeyField, page.getId(), newRightSiblingPage.getId());
+		parentPage.insertEntry(parentEntry);
+
+		if (null != oldRightSiblingId) {
+			BTreeLeafPage oldRightSiblingPage = (BTreeLeafPage) getPage(tid, dirtypages, oldRightSiblingId, Permissions.READ_WRITE);
+			oldRightSiblingPage.setLeftSiblingId(newRightSiblingPage.getId());
+			dirtypages.put(oldRightSiblingId, oldRightSiblingPage);
+		}
+		dirtypages.put(parentPage.getId(), parentPage);
+		dirtypages.put(page.getId(), page);
+		dirtypages.put(newRightSiblingPage.getId(), newRightSiblingPage);
+
+        return field.compare(Op.GREATER_THAN, middleKeyField)?newRightSiblingPage:page;
 	}
 	
 	/**
@@ -296,7 +326,32 @@ public class BTreeFile implements DbFile {
 		// the parent pointers of all the children moving to the new page.  updateParentPointers()
 		// will be useful here.  Return the page into which an entry with the given key field
 		// should be inserted.
-		return null;
+		BTreeInternalPage newInternalPage = (BTreeInternalPage) getEmptyPage(tid, dirtypages, BTreePageId.INTERNAL);
+		Iterator<BTreeEntry> iterator = page.reverseIterator();
+		BTreeEntry[] halfEntry = new BTreeEntry[(page.getNumEntries() + 1)/2];
+		for (int i=halfEntry.length-1;iterator.hasNext() && i>=0;i--) {
+			halfEntry[i] = iterator.next();
+		}
+		for (int i=halfEntry.length-1;i>=0;i--) {
+			page.deleteKeyAndRightChild(halfEntry[i]);
+			if (i>=1) {
+				newInternalPage.insertEntry(halfEntry[i]);
+			}
+			updateParentPointer(tid, dirtypages, newInternalPage.getId(), halfEntry[i].getRightChild());
+		}
+
+		BTreeEntry middleEntry = halfEntry[0];
+		middleEntry.setLeftChild(page.getId());
+		middleEntry.setRightChild(newInternalPage.getId());
+		BTreeInternalPage parentPage = getParentWithEmptySlots(tid, dirtypages, page.getParentId(), middleEntry.getKey());
+		parentPage.insertEntry(middleEntry);
+		page.setParentId(parentPage.getId());
+
+		dirtypages.put(parentPage.getId(), parentPage);
+		dirtypages.put(page.getId(), page);
+		dirtypages.put(newInternalPage.getId(), newInternalPage);
+
+		return field.compare(Op.GREATER_THAN, middleEntry.getKey())?newInternalPage:page;
 	}
 	
 	/**
