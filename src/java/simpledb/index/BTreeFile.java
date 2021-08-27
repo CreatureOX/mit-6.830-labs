@@ -643,6 +643,18 @@ public class BTreeFile implements DbFile {
         // Move some of the tuples from the sibling to the page so
 		// that the tuples are evenly distributed. Be sure to update
 		// the corresponding parent entry.
+		Iterator<Tuple> iterator = isRightSibling? sibling.iterator() : sibling.reverseIterator();
+		Tuple[] stealTuples = new Tuple[(sibling.getNumTuples() - page.getNumTuples())/2];
+		for (int i=stealTuples.length-1;iterator.hasNext() && i>=0;i--) {
+			Tuple stealTuple = iterator.next();
+			sibling.deleteTuple(stealTuple);
+			page.insertTuple(stealTuple);
+		}
+		Iterator<Tuple> rightHandPageIterator = (isRightSibling? sibling: page).iterator();
+		if (rightHandPageIterator.hasNext()) {
+			entry.setKey(rightHandPageIterator.next().getField(keyField));
+			parent.updateEntry(entry);
+		}
 	}
 
 	/**
@@ -722,6 +734,29 @@ public class BTreeFile implements DbFile {
 		// that the entries are evenly distributed. Be sure to update
 		// the corresponding parent entry. Be sure to update the parent
 		// pointers of all children in the entries that were moved.
+		int stealNumber = (leftSibling.getNumEntries() - page.getNumEntries())/2;
+		Iterator<BTreeEntry> leftSiblingReverseIterator = leftSibling.reverseIterator();
+		for (int i=0;i<stealNumber && leftSiblingReverseIterator.hasNext();i++) {
+			BTreeEntry stealEntry = leftSiblingReverseIterator.next();
+			leftSibling.deleteKeyAndRightChild(stealEntry);
+
+			BTreeEntry newParentEntry = new BTreeEntry(stealEntry.getKey(), parentEntry.getLeftChild(), parentEntry.getRightChild());
+			newParentEntry.setRecordId(parentEntry.getRecordId());
+			parent.updateEntry(newParentEntry);
+
+			BTreeEntry firstPageEntry = page.iterator().next();
+			BTreeEntry newFirstPageEntry = new BTreeEntry(parentEntry.getKey(), stealEntry.getRightChild(), firstPageEntry.getLeftChild());
+			page.insertEntry(newFirstPageEntry);
+
+			parentEntry = newParentEntry;
+		}
+
+		updateParentPointers(tid, dirtypages, leftSibling);
+		updateParentPointers(tid, dirtypages, page);
+
+		dirtypages.put(parent.getId(), parent);
+		dirtypages.put(leftSibling.getId(), leftSibling);
+		dirtypages.put(page.getId(), page);
 	}
 	
 	/**
@@ -749,6 +784,29 @@ public class BTreeFile implements DbFile {
 		// that the entries are evenly distributed. Be sure to update
 		// the corresponding parent entry. Be sure to update the parent
 		// pointers of all children in the entries that were moved.
+		int stealNumber = (rightSibling.getNumEntries() - page.getNumEntries())/2;
+		Iterator<BTreeEntry> rightSiblingReverseIterator = rightSibling.iterator();
+		for (int i=0;i<stealNumber && rightSiblingReverseIterator.hasNext();i++) {
+			BTreeEntry stealEntry = rightSiblingReverseIterator.next();
+			rightSibling.deleteKeyAndLeftChild(stealEntry);
+
+			BTreeEntry newParentEntry = new BTreeEntry(stealEntry.getKey(), parentEntry.getLeftChild(), parentEntry.getRightChild());
+			newParentEntry.setRecordId(parentEntry.getRecordId());
+			parent.updateEntry(newParentEntry);
+
+			BTreeEntry lastPageEntry = page.reverseIterator().next();
+			BTreeEntry newLastPageEntry = new BTreeEntry(parentEntry.getKey(), lastPageEntry.getRightChild(), stealEntry.getLeftChild());
+			page.insertEntry(newLastPageEntry);
+
+			parentEntry = newParentEntry;
+		}
+
+		updateParentPointers(tid, dirtypages, page);
+		updateParentPointers(tid, dirtypages, rightSibling);
+
+		dirtypages.put(parent.getId(), parent);
+		dirtypages.put(page.getId(), page);
+		dirtypages.put(rightSibling.getId(), rightSibling);
 	}
 	
 	/**
