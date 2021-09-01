@@ -511,6 +511,97 @@ public class LogFile {
             synchronized (this) {
                 recoveryUndecided = false;
                 // some code goes here
+                currentOffset = raf.length();
+                raf.seek(0);
+                long lastCheckpoint = raf.readLong();
+                if (NO_CHECKPOINT_ID == lastCheckpoint) {
+                    lastCheckpoint = LONG_SIZE;
+                }
+                Set<Long> transactions = new HashSet<>();
+                Set<Long> commits = new HashSet<>();
+                // read backwards
+                raf.seek(raf.length() - LONG_SIZE);
+                long logOffset = raf.readLong();
+                while (logOffset >= lastCheckpoint) {
+                    raf.seek(logOffset);
+                    int type = raf.readInt();
+                    long tid;
+                    switch (type) {
+                        case COMMIT_RECORD:
+                            tid = raf.readLong();
+                            commits.add(tid);
+                            break;
+                        case BEGIN_RECORD:
+                            tid = raf.readLong();
+                            transactions.add(tid);
+                            break;
+                        case CHECKPOINT_RECORD:
+                            assert lastCheckpoint == logOffset;
+                            raf.readLong();
+                            int activeTransactionNums = raf.readInt();
+                            for (int i=0;i<activeTransactionNums;i++) {
+                                tid = raf.readLong();
+                                long firstLogOffset = raf.readLong();
+                                transactions.add(tid);
+                                tidToFirstLogRecord.put(tid, firstLogOffset);
+                            }
+                            break;
+                        default:
+                            break;
+                    }
+                    raf.seek(logOffset - LONG_SIZE);
+                    logOffset = raf.readLong();
+                }
+                // redo
+                logOffset = lastCheckpoint;
+                while (logOffset < currentOffset) {
+                    raf.seek(logOffset);
+                    int type = raf.readInt();
+                    long tid;
+                    switch (type) {
+                        case ABORT_RECORD:
+                            tid = raf.readLong();
+                            logOffset = raf.getFilePointer();
+                            rollback(tid);
+                            transactions.remove(tid);
+                            tidToFirstLogRecord.remove(tid);
+                            break;
+                        case COMMIT_RECORD:
+                            tid = raf.readLong();
+                            transactions.remove(tid);
+                            tidToFirstLogRecord.remove(tid);
+                            logOffset = raf.getFilePointer();
+                            break;
+                        case UPDATE_RECORD:
+                            raf.readLong();
+                            readPageData(raf);
+                            Page afterImage = readPageData(raf);
+                            Database.getCatalog().getDatabaseFile(afterImage.getId().getTableId()).writePage(afterImage);
+                            Database.getBufferPool().discardPage(afterImage.getId());
+                            logOffset = raf.getFilePointer();
+                            break;
+                        case BEGIN_RECORD:
+                            tid = raf.readLong();
+                            tidToFirstLogRecord.put(tid, logOffset);
+                            logOffset = raf.getFilePointer();
+                            break;
+                        case CHECKPOINT_RECORD:
+                            assert lastCheckpoint == logOffset;
+                            raf.readLong();
+                            int activeTransactionNums = raf.readInt();
+                            logOffset = raf.getFilePointer() + activeTransactionNums * LONG_SIZE * 2L;
+                            break;
+                        default:
+                            break;
+                    }
+                    logOffset += LONG_SIZE;
+                }
+                // undo
+                for (Long tid: transactions) {
+                    if (!commits.contains(tid)) {
+                        rollback(tid);
+                    }
+                }
             }
         }
     }
