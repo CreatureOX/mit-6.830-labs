@@ -266,11 +266,15 @@ public class BufferPool {
             }
             if (cache.containsKey(lockedEntry.getKey())) {
                 if (commit) {
+                    Page cachedPage = cache.get(lockedEntry.getKey());
                     try {
                         flushPage(lockedEntry.getKey());
                     }catch (IOException e){
                         e.printStackTrace();
                     }
+                    // use current page contents as the before-image
+                    // for the next transaction that modifies this page.
+                    cachedPage.setBeforeImage();
                 }else {
                     discardPage(lockedEntry.getKey());
                 }
@@ -376,8 +380,13 @@ public class BufferPool {
         if (null == matchedPage) {
             throw new NoSuchElementException();
         }
+        // append an update record to the log, with
+        // a before-image and after-image.
         TransactionId tid = matchedPage.isDirty();
         if (tid != null) {
+            Database.getLogFile().logWrite(tid, matchedPage.getBeforeImage(), matchedPage);
+            Database.getLogFile().force();
+
             Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(matchedPage);
             matchedPage.markDirty(false, null);
         }
