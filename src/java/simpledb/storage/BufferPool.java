@@ -68,6 +68,16 @@ public class BufferPool {
             this.pageLockMap = new ConcurrentHashMap<>();
         }
 
+        public synchronized Map<PageId, Lock> getLockedPagesOnTransactionId(TransactionId tid) {
+            Map<PageId, Lock> lockedEntries = new HashMap<>();
+            for (Map.Entry<PageId, Vector<Lock>> entry: pageLockMap.entrySet()) {
+                entry.getValue().stream()
+                        .filter(lock -> lock.tid.equals(tid))
+                        .findAny().ifPresent(lock -> lockedEntries.put(entry.getKey(), lock));
+            }
+            return lockedEntries;
+        }
+
         public synchronized boolean acquireLock(TransactionId tid, PageId pid, int lockType) {
             Vector<Lock> locks = pageLockMap.get(pid);
             if (null == locks) {
@@ -223,6 +233,7 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid) {
         // some code goes here
         // not necessary for lab1|lab2
+        transactionComplete(tid, true);
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
@@ -242,6 +253,26 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid, boolean commit) {
         // some code goes here
         // not necessary for lab1|lab2
+        Map<PageId, Lock> lockedEntries = pageLockManager.getLockedPagesOnTransactionId(tid);
+        for (Map.Entry<PageId, Lock> lockedEntry: lockedEntries.entrySet()) {
+            if (Lock.SHARED == lockedEntry.getValue().lockType) {
+                continue;
+            }
+            if (cache.containsKey(lockedEntry.getKey())) {
+                if (commit) {
+                    try {
+                        flushPage(lockedEntry.getKey());
+                    }catch (IOException e){
+                        e.printStackTrace();
+                    }
+                }else {
+                    discardPage(lockedEntry.getKey());
+                }
+            }
+        }
+        for (PageId pid: lockedEntries.keySet()) {
+            unsafeReleasePage(tid, pid);
+        }
     }
 
     /**
@@ -307,6 +338,11 @@ public class BufferPool {
     public synchronized void flushAllPages() throws IOException {
         // some code goes here
         // not necessary for lab1
+        for (Page page: cache.values()) {
+            if (null != page.isDirty()) {
+                flushPage(page.getId());
+            }
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -346,6 +382,11 @@ public class BufferPool {
     public synchronized  void flushPages(TransactionId tid) throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
+        for (Page page: cache.values()) {
+            if (tid.equals(page.isDirty())) {
+                flushPage(page.getId());
+            }
+        }
     }
 
     /**
